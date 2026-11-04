@@ -1,0 +1,278 @@
+
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hub de Pedidos - Monitor em Tempo Real</title>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/10.0.0/signalr.min.js"></script>
+
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #f3f4f6;
+            margin: 0;
+            padding: 30px;
+        }
+
+        .container {
+            max-width: 750px;
+            margin: auto;
+            background: white;
+            padding: 25px;
+            border-radius: 12px;
+            box-shadow: 0 3px 12px #00000015;
+        }
+
+        h1 {
+            color: #1f2937;
+        }
+
+        input, button {
+            padding: 11px;
+            margin: 6px 0;
+            border-radius: 6px;
+            border: 1px solid #ccc;
+            width: 100%;
+            box-sizing: border-box;
+        }
+
+        button {
+            background: #2563eb;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background: #1d4ed8;
+        }
+
+        .status {
+            padding: 12px;
+            border-radius: 6px;
+            background: #e5e7eb;
+            margin: 15px 0;
+            font-weight: bold;
+        }
+
+        .evento {
+            padding: 12px;
+            margin-top: 10px;
+            background: #eff6ff;
+            border-left: 4px solid #2563eb;
+            border-radius: 5px;
+        }
+
+        #log {
+            margin-top: 20px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>Hub de Pedidos</h1>
+        <p>Monitoramento de pedidos em tempo real com SignalR.</p>
+
+        <div id="status" class="status">
+            Desconectado
+        </div>
+
+        <label>Token JWT:</label>
+        <input
+            type="password"
+            id="token"
+            placeholder="Cole seu token JWT">
+
+        <label>ID do pedido:</label>
+        <input
+            type="text"
+            id="pedidoId"
+            placeholder="Digite o GUID do pedido">
+
+        <button onclick="conectar()">Conectar</button>
+        <button onclick="acompanhar()">Acompanhar pedido</button>
+        <button onclick="desconectar()">Desconectar</button>
+
+        <h2>Atualizações recebidas</h2>
+        <div id="log"></div>
+    </div>
+
+    <script>
+        let connection = null;
+        let pedidoAtual = null;
+        let estadoConexao = "Desconectado";
+
+        const statusElement = document.getElementById("status");
+        const logElement = document.getElementById("log");
+
+        function atualizarStatus(status) {
+            estadoConexao = status;
+            statusElement.textContent = status;
+        }
+
+        function registrarLog(mensagem) {
+            const item = document.createElement("div");
+            item.className = "evento";
+            item.textContent = mensagem;
+            logElement.prepend(item);
+        }
+
+        function obterToken() {
+            return document.getElementById("token").value.trim();
+        }
+
+        function obterPedidoId() {
+            return document.getElementById("pedidoId").value.trim();
+        }
+
+        async function acompanharPedido() {
+            const pedidoId = pedidoAtual;
+
+            if (!pedidoId || !connection ||
+                connection.state !== signalR.HubConnectionState.Connected) {
+                return;
+            }
+
+            await connection.invoke("AcompanharPedido", pedidoId);
+
+            registrarLog("Autorização confirmada para acompanhar o pedido.");
+        }
+
+        async function reconciliar() {
+            if (!pedidoAtual) return;
+
+            const token = obterToken();
+
+            const resposta = await fetch(
+                `/api/v3/pedidos/${pedidoAtual}`,
+                {
+                    headers: {
+                        "Authorization": `Bearer ${token}`
+                    }
+                }
+            );
+
+            if (!resposta.ok) {
+                registrarLog(
+                    "Não foi possível recuperar o estado atual do pedido. HTTP " +
+                    resposta.status
+                );
+                return;
+            }
+
+            const pedido = await resposta.json();
+
+            registrarLog(
+                "Estado recuperado pela API: " +
+                JSON.stringify(pedido)
+            );
+        }
+
+        async function conectar() {
+            const token = obterToken();
+
+            if (!token) {
+                alert("Informe o token JWT.");
+                return;
+            }
+
+            if (connection) {
+                await desconectar();
+            }
+
+            connection = new signalR.HubConnectionBuilder()
+                .withUrl("/hubs/pedidos", {
+                    accessTokenFactory: () => obterToken()
+                })
+                .withAutomaticReconnect([0, 2000, 5000, 10000, 20000])
+                .build();
+
+            connection.on("PedidoAtualizado", evento => {
+                registrarLog(
+                    `Pedido ${evento.pedidoId} atualizado. ` +
+                    `Versão: ${evento.versao}. ` +
+                    `Prioritário: ${evento.prioritario}. ` +
+                    `Data: ${evento.atualizadoEmUtc}`
+                );
+            });
+
+            connection.onreconnecting(() => {
+                atualizarStatus("Reconectando...");
+                registrarLog("Conexão interrompida. Tentando reconectar.");
+            });
+
+            connection.onreconnected(async () => {
+                atualizarStatus("Conectado novamente");
+                registrarLog("Reconexão concluída.");
+
+                try {
+                    // O servidor valida novamente a autorização.
+                    await acompanharPedido();
+
+                    // Recupera alterações que podem ter ocorrido
+                    // durante a desconexão.
+                    await reconciliar();
+                } catch (erro) {
+                    registrarLog(
+                        "Falha ao restaurar acompanhamento: " + erro
+                    );
+                }
+            });
+
+            connection.onclose(() => {
+                atualizarStatus("Desconectado");
+                registrarLog("Conexão encerrada.");
+            });
+
+            try {
+                await connection.start();
+
+                atualizarStatus("Conectado");
+                registrarLog("Conexão SignalR estabelecida.");
+
+                if (pedidoAtual) {
+                    await acompanharPedido();
+                    await reconciliar();
+                }
+            } catch (erro) {
+                atualizarStatus("Falha na conexão");
+                registrarLog("Erro: " + erro);
+            }
+        }
+
+        async function acompanhar() {
+            pedidoAtual = obterPedidoId();
+
+            if (!pedidoAtual) {
+                alert("Informe o ID do pedido.");
+                return;
+            }
+
+            if (!connection ||
+                connection.state !== signalR.HubConnectionState.Connected) {
+                alert("Conecte-se primeiro.");
+                return;
+            }
+
+            try {
+                await acompanharPedido();
+                await reconciliar();
+            } catch (erro) {
+                registrarLog("Erro ao acompanhar pedido: " + erro);
+            }
+        }
+
+        async function desconectar() {
+            if (connection) {
+                await connection.stop();
+                connection = null;
+            }
+
+            atualizarStatus("Desconectado");
+        }
+    </script>
+</body>
+</html>

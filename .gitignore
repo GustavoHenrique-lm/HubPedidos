@@ -1,0 +1,41 @@
+﻿# Compilação .NET
+[Bb]in/
+[Oo]bj/
+
+# Visual Studio e VS Code
+.vs/
+.vscode/
+
+# Arquivos de usuário
+*.user
+*.suo
+
+# Configurações locais e segredos
+appsettings.Development.json
+appsettings.Local.json
+secrets.json
+
+# Diagnósticos e rastreamentos
+*.nettrace
+*.speedscope.json
+
+# Resultados de benchmarks
+BenchmarkDotNet.Artifacts/
+
+# Resultados de testes e cobertura
+TestResults/
+coverage/
+*.trx
+*.coverage
+
+# Arquivos temporários
+*.tmp
+*.log
+
+# Arquivos do sistema
+Thumbs.db
+.DS_Store
+
+# Configurações locais
+**/appsettings.Development.json
+**/appsettings.Local.json
